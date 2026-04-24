@@ -52,11 +52,11 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 				authSecret.DELETE("/delete/:id", secretController.DeleteSecret)
 				authSecret.DELETE("/delete_all", secretController.DeleteAll)
 				authSecret.GET("/query", secretController.QuerySecret)
+				authSecret.GET("/get-for-edit/:id", secretController.GetSecretForEdit)
 			}
 
 			// 不需要认证的路由
 			secret.GET("/get/:id", secretController.GetSecret)
-			secret.GET("/get-for-edit/:id", secretController.GetSecretForEdit)
 			secret.POST("/verify", secretController.VerifySecret)
 		}
 

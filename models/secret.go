@@ -3,12 +3,12 @@ package models
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
-	"io"
 	"time"
 
 	"github.com/bwmarrin/snowflake"
+	"golang.org/x/crypto/pbkdf2"
 	"gorm.io/gorm"
 )
 
@@ -53,54 +53,26 @@ func (s *Secret) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// Encrypt 加密数据
-func Encrypt(text, key string) (string, error) {
-	// 解码 base64 密钥
-	keyBytes, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		return "", err
-	}
-
-	// 创建 AES 加密器
-	block, err := aes.NewCipher(keyBytes)
-	if err != nil {
-		return "", err
-	}
-
-	// 创建 GCM 模式
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	// 生成随机 nonce
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-
-	// 加密数据
-	ciphertext := gcm.Seal(nonce, nonce, []byte(text), nil)
-
-	// 编码为 base64
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
-}
-
 // Decrypt 解密数据
 func Decrypt(encryptedText, key string) (string, error) {
 	// 尝试解码 base64 加密数据
-	ciphertext, err := base64.StdEncoding.DecodeString(encryptedText)
+	combined, err := base64.StdEncoding.DecodeString(encryptedText)
 	if err != nil {
 		// 如果解码失败，可能是未加密的数据，直接返回
 		return encryptedText, nil
 	}
 
-	// 解码 base64 密钥
-	keyBytes, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		// 如果密钥解码失败，直接返回原始文本
+	// 分离 salt、iv 和密文
+	if len(combined) < 16+12 {
+		// 如果数据长度不够，可能是未加密的数据，直接返回
 		return encryptedText, nil
 	}
+	salt := combined[:16]
+	iv := combined[16 : 16+12]
+	ciphertext := combined[16+12:]
+
+	// 使用 PBKDF2 从密码生成密钥
+	keyBytes := pbkdf2.Key([]byte(key), salt, 100000, 32, sha256.New)
 
 	// 创建 AES 加密器
 	block, err := aes.NewCipher(keyBytes)
@@ -116,17 +88,8 @@ func Decrypt(encryptedText, key string) (string, error) {
 		return encryptedText, nil
 	}
 
-	// 检查数据长度
-	if len(ciphertext) < gcm.NonceSize() {
-		// 如果数据长度不够，可能是未加密的数据，直接返回
-		return encryptedText, nil
-	}
-
-	// 分离 nonce 和密文
-	nonce, ciphertext := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
-
 	// 解密数据
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, iv, ciphertext, nil)
 	if err != nil {
 		// 如果解密失败，可能是未加密的数据，直接返回
 		return encryptedText, nil

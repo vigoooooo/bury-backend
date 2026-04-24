@@ -146,58 +146,11 @@ func (sc *SecretController) CreateSecret(c *gin.Context) {
 		return
 	}
 
-	// 校验 extractcode 和 decoypassword 不能一样
-	if req.EnableDecoyPassword && req.DecoyPassword != "" && req.ExtractCode == req.DecoyPassword {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Extract code and decoy password cannot be the same"})
-		return
-	}
-
-	// 获取用户的加密密钥
-	var user models.User
-	if result := models.DB.Where("id = ?", userID).First(&user); result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user information"})
-		return
-	}
-
-	// 加密秘密内容
-	encryptedContent, err := models.Encrypt(req.SecretContent, user.EncryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt secret content"})
-		return
-	}
-
-	// 加密提取码
-	encryptedExtractCode, err := models.Encrypt(req.ExtractCode, user.EncryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt extract code"})
-		return
-	}
-
-	// 加密诱饵内容
-	var encryptedDecoyContent string
-	if req.DecoyContent != "" {
-		encryptedDecoyContent, err = models.Encrypt(req.DecoyContent, user.EncryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt decoy content"})
-			return
-		}
-	}
-
-	// 加密诱饵密码
-	var encryptedDecoyPassword string
-	if req.DecoyPassword != "" {
-		encryptedDecoyPassword, err = models.Encrypt(req.DecoyPassword, user.EncryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt decoy password"})
-			return
-		}
-	}
-
 	secret := models.Secret{
 		UserID:                   userID.(uint),
 		SecretTitle:              req.SecretTitle,
-		SecretContent:            encryptedContent,
-		ExtractCode:              encryptedExtractCode,
+		SecretContent:            req.SecretContent,
+		ExtractCode:              req.ExtractCode,
 		DestructionMethod:        req.DestructionMethod,
 		MaximumViews:             req.MaximumViews,
 		RemainingViews:           req.MaximumViews,
@@ -206,8 +159,8 @@ func (sc *SecretController) CreateSecret(c *gin.Context) {
 		FailedAttempts:           req.FailedAttempts,
 		RemainingAttempts:        req.FailedAttempts,
 		EnableDecoyPassword:      req.EnableDecoyPassword,
-		DecoyContent:             encryptedDecoyContent,
-		DecoyPassword:            encryptedDecoyPassword,
+		DecoyContent:             req.DecoyContent,
+		DecoyPassword:            req.DecoyPassword,
 		DestroyOnDecoyAccess:     req.DestroyOnDecoyAccess,
 		DestroyTime:              req.DestroyTime,
 	}
@@ -250,53 +203,6 @@ func (sc *SecretController) UpdateSecret(c *gin.Context) {
 		return
 	}
 
-	// 校验 extractcode 和 decoypassword 不能一样
-	if req.EnableDecoyPassword && req.DecoyPassword != "" && req.ExtractCode == req.DecoyPassword {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Extract code and decoy password cannot be the same"})
-		return
-	}
-
-	// 获取用户的加密密钥
-	var user models.User
-	if result := models.DB.Where("id = ?", userID).First(&user); result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user information"})
-		return
-	}
-
-	// 加密秘密内容
-	encryptedContent, err := models.Encrypt(req.SecretContent, user.EncryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt secret content"})
-		return
-	}
-
-	// 加密提取码
-	encryptedExtractCode, err := models.Encrypt(req.ExtractCode, user.EncryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt extract code"})
-		return
-	}
-
-	// 加密诱饵内容
-	var encryptedDecoyContent string
-	if req.EnableDecoyPassword && req.DecoyContent != "" {
-		encryptedDecoyContent, err = models.Encrypt(req.DecoyContent, user.EncryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt decoy content"})
-			return
-		}
-	}
-
-	// 加密诱饵密码
-	var encryptedDecoyPassword string
-	if req.DecoyPassword != "" {
-		encryptedDecoyPassword, err = models.Encrypt(req.DecoyPassword, user.EncryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt decoy password"})
-			return
-		}
-	}
-
 	// 查找秘密
 	var secret models.Secret
 	if result := models.DB.Where("id = ? AND user_id = ? AND is_deleted = ?", secretID, userID, false).First(&secret); result.Error != nil {
@@ -306,8 +212,8 @@ func (sc *SecretController) UpdateSecret(c *gin.Context) {
 
 	// 更新秘密
 	secret.SecretTitle = req.SecretTitle
-	secret.SecretContent = encryptedContent
-	secret.ExtractCode = encryptedExtractCode
+	secret.SecretContent = req.SecretContent
+	secret.ExtractCode = req.ExtractCode
 	secret.DestructionMethod = req.DestructionMethod
 	secret.MaximumViews = req.MaximumViews
 	secret.RemainingViews = req.MaximumViews // 重置剩余查看次数
@@ -316,8 +222,8 @@ func (sc *SecretController) UpdateSecret(c *gin.Context) {
 	secret.FailedAttempts = req.FailedAttempts
 	secret.RemainingAttempts = req.FailedAttempts // 重置剩余尝试次数
 	secret.EnableDecoyPassword = req.EnableDecoyPassword
-	secret.DecoyContent = encryptedDecoyContent
-	secret.DecoyPassword = encryptedDecoyPassword
+	secret.DecoyContent = req.DecoyContent
+	secret.DecoyPassword = req.DecoyPassword
 	secret.DestroyOnDecoyAccess = req.DestroyOnDecoyAccess
 	secret.DestroyTime = req.DestroyTime
 
@@ -497,58 +403,24 @@ func (sc *SecretController) GetSecret(c *gin.Context) {
 		return
 	}
 
-	// 获取用户的加密密钥
-	var user models.User
-	if result := models.DB.Where("id = ?", secret.UserID).First(&user); result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user information"})
-		return
-	}
-
-	// 解密秘密内容
-	decryptedContent, err := models.Decrypt(secret.SecretContent, user.EncryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decrypt secret content"})
-		return
-	}
-
-	// 解密诱饵内容
-	var decryptedDecoyContent string
-	if secret.DecoyContent != "" {
-		decryptedDecoyContent, err = models.Decrypt(secret.DecoyContent, user.EncryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decrypt decoy content"})
-			return
-		}
-	}
-
 	// 创建最小响应
 	minimalSecret := MinimalSecretResponse{
 		ID: strconv.FormatUint(uint64(secret.ID), 10),
 	}
 
+	// 使用状态机处理访问
+	stateMachine := models.NewSecretStateMachine(&secret, models.DB)
+	_, err = stateMachine.ProcessView(isDecoy)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process secret view"})
+		return
+	}
+
 	// 如果是诱饵码，返回诱饵内容
 	if isDecoy {
-		minimalSecret.SecretContent = decryptedDecoyContent
-
-		// 如果设置了访问诱饵后销毁秘密
-		if secret.DestroyOnDecoyAccess {
-			// 物理删除秘密
-			models.DB.Unscoped().Delete(&secret)
-		}
+		minimalSecret.SecretContent = secret.DecoyContent
 	} else {
-		minimalSecret.SecretContent = decryptedContent
-
-		// 如果销毁方式为view，减少剩余次数
-		if secret.DestructionMethod == "view" {
-			secret.RemainingViews--
-			if secret.RemainingViews <= 0 {
-				// 剩余次数为0，物理删除秘密
-				models.DB.Unscoped().Delete(&secret)
-			} else {
-				// 更新剩余次数
-				models.DB.Save(&secret)
-			}
-		}
+		minimalSecret.SecretContent = secret.SecretContent
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -562,6 +434,13 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 	secretID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid secret ID"})
+		return
+	}
+
+	// 验证用户身份
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
 
@@ -594,9 +473,9 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 		return
 	}
 
-	// 检查秘密是否存在
+	// 检查秘密是否存在且属于当前用户
 	var secret models.Secret
-	if result := models.DB.Where("id = ?", secretID).First(&secret); result.Error != nil {
+	if result := models.DB.Where("id = ? AND user_id = ?", secretID, userID).First(&secret); result.Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Secret not found"})
 		return
 	}
@@ -605,47 +484,6 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 	if secret.IsDeleted {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Secret has been deleted"})
 		return
-	}
-
-	// 获取用户的加密密钥
-	var user models.User
-	if result := models.DB.Where("id = ?", secret.UserID).First(&user); result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user information"})
-		return
-	}
-
-	// 解密秘密内容
-	decryptedContent, err := models.Decrypt(secret.SecretContent, user.EncryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decrypt secret content"})
-		return
-	}
-
-	// 解密提取码
-	decryptedExtractCode, err := models.Decrypt(secret.ExtractCode, user.EncryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decrypt extract code"})
-		return
-	}
-
-	// 解密诱饵内容
-	var decryptedDecoyContent string
-	if secret.DecoyContent != "" {
-		decryptedDecoyContent, err = models.Decrypt(secret.DecoyContent, user.EncryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decrypt decoy content"})
-			return
-		}
-	}
-
-	// 解密诱饵密码
-	var decryptedDecoyPassword string
-	if secret.DecoyPassword != "" {
-		decryptedDecoyPassword, err = models.Decrypt(secret.DecoyPassword, user.EncryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decrypt decoy password"})
-			return
-		}
 	}
 
 	// 创建完整的编辑响应
@@ -667,8 +505,8 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 	}{
 		ID:                       strconv.FormatUint(uint64(secret.ID), 10),
 		SecretTitle:              secret.SecretTitle,
-		SecretContent:            decryptedContent,
-		ExtractCode:              decryptedExtractCode,
+		SecretContent:            secret.SecretContent,
+		ExtractCode:              secret.ExtractCode,
 		DestructionMethod:        secret.DestructionMethod,
 		MaximumViews:             secret.MaximumViews,
 		DestroyTime:              secret.DestroyTime,
@@ -676,8 +514,8 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 		WrongPasswordDestruction: secret.WrongPasswordDestruction,
 		FailedAttempts:           secret.FailedAttempts,
 		EnableDecoyPassword:      secret.EnableDecoyPassword,
-		DecoyContent:             decryptedDecoyContent,
-		DecoyPassword:            decryptedDecoyPassword,
+		DecoyContent:             secret.DecoyContent,
+		DecoyPassword:            secret.DecoyPassword,
 		DestroyOnDecoyAccess:     secret.DestroyOnDecoyAccess,
 	}
 
@@ -733,20 +571,13 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 		return
 	}
 
-	// 获取用户的加密密钥
-	var user models.User
-	if result := models.DB.Where("id = ?", secret.UserID).First(&user); result.Error != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"is_valid":      false,
-			"extract_token": "",
-		})
-		return
-	}
+	// 解密提取码和诱饵密码
+	const encryptionKey = "bury-secret-key-2026" // 与前端使用相同的密钥
 
 	// 解密提取码
-	decryptedExtractCode, err := models.Decrypt(secret.ExtractCode, user.EncryptionKey)
+	decryptedExtractCode, err := models.Decrypt(secret.ExtractCode, encryptionKey)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"is_valid":      false,
 			"extract_token": "",
 		})
@@ -756,9 +587,10 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 	// 检查是否是诱饵码
 	isDecoy := false
 	if secret.EnableDecoyPassword && secret.DecoyPassword != "" {
-		decryptedDecoyPassword, err := models.Decrypt(secret.DecoyPassword, user.EncryptionKey)
+		// 解密诱饵密码
+		decryptedDecoyPassword, err := models.Decrypt(secret.DecoyPassword, encryptionKey)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
+			c.JSON(http.StatusInternalServerError, gin.H{
 				"is_valid":      false,
 				"extract_token": "",
 			})
@@ -773,20 +605,15 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 	if req.Mode == "edit" {
 		// 在edit模式下，只有输入正确的Extractcode才能验证成功
 		if decryptedExtractCode != req.Code {
-			// 处理错误密码计数
-			if secret.WrongPasswordDestruction {
-				secret.RemainingAttempts--
-				if secret.RemainingAttempts <= 0 {
-					// 剩余尝试次数为0，物理删除秘密
-					models.DB.Unscoped().Delete(&secret)
-					c.JSON(http.StatusOK, gin.H{
-						"is_valid":      false,
-						"extract_token": "",
-					})
-					return
-				}
-				// 更新剩余尝试次数
-				models.DB.Save(&secret)
+			// 使用状态机处理错误密码
+			stateMachine := models.NewSecretStateMachine(&secret, models.DB)
+			_, err := stateMachine.ProcessWrongPassword()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"is_valid":      false,
+					"extract_token": "",
+				})
+				return
 			}
 			c.JSON(http.StatusOK, gin.H{
 				"is_valid":      false,
@@ -797,20 +624,15 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 	} else {
 		// 在view模式下，真正的提取码或诱饵码都可以通过验证
 		if decryptedExtractCode != req.Code && !isDecoy {
-			// 处理错误密码计数
-			if secret.WrongPasswordDestruction {
-				secret.RemainingAttempts--
-				if secret.RemainingAttempts <= 0 {
-					// 剩余尝试次数为0，物理删除秘密
-					models.DB.Unscoped().Delete(&secret)
-					c.JSON(http.StatusOK, gin.H{
-						"is_valid":      false,
-						"extract_token": "",
-					})
-					return
-				}
-				// 更新剩余尝试次数
-				models.DB.Save(&secret)
+			// 使用状态机处理错误密码
+			stateMachine := models.NewSecretStateMachine(&secret, models.DB)
+			_, err := stateMachine.ProcessWrongPassword()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"is_valid":      false,
+					"extract_token": "",
+				})
+				return
 			}
 			c.JSON(http.StatusOK, gin.H{
 				"is_valid":      false,
@@ -821,9 +643,13 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 	}
 
 	// 重置错误尝试次数
-	if secret.WrongPasswordDestruction && secret.RemainingAttempts != secret.FailedAttempts {
-		secret.RemainingAttempts = secret.FailedAttempts
-		models.DB.Save(&secret)
+	stateMachine := models.NewSecretStateMachine(&secret, models.DB)
+	if err := stateMachine.ResetAttempts(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"is_valid":      false,
+			"extract_token": "",
+		})
+		return
 	}
 
 	// 生成 extract_token

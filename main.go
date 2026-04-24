@@ -47,29 +47,10 @@ func main() {
 func cleanupSecrets() {
 	log.Println("Running secret cleanup task...")
 
-	// 1. 清理剩余访问次数为0的秘密
-	var viewSecrets []models.Secret
-	models.DB.Where("destruction_method = ? AND remaining_views <= 0", "view").Find(&viewSecrets)
-	for _, secret := range viewSecrets {
-		models.DB.Unscoped().Delete(&secret)
-		log.Printf("Deleted secret %d: remaining views reached 0", secret.ID)
+	// 使用状态机清理过期秘密
+	if err := models.CleanupExpired(models.DB); err != nil {
+		log.Printf("Error cleaning up expired secrets: %v", err)
+	} else {
+		log.Println("Secret cleanup task completed")
 	}
-
-	// 2. 清理剩余错误尝试次数为0的秘密
-	var attemptSecrets []models.Secret
-	models.DB.Where("wrong_password_destruction = ? AND remaining_attempts <= 0", true).Find(&attemptSecrets)
-	for _, secret := range attemptSecrets {
-		models.DB.Unscoped().Delete(&secret)
-		log.Printf("Deleted secret %d: remaining attempts reached 0", secret.ID)
-	}
-
-	// 3. 清理到达销毁时间的秘密
-	var timeSecrets []models.Secret
-	models.DB.Where("destruction_method = ? AND destroy_time <= ?", "time", time.Now()).Find(&timeSecrets)
-	for _, secret := range timeSecrets {
-		models.DB.Unscoped().Delete(&secret)
-		log.Printf("Deleted secret %d: destruction time reached", secret.ID)
-	}
-
-	log.Println("Secret cleanup task completed")
 }
