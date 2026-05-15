@@ -1,0 +1,13 @@
+# Production environment configuration
+database:
+  host: 127.0.0.1
+  port: 3306
+  user: bury_user
+  password: bury_password_2024
+  database: bury
+
+jwt:
+  secret: bury_jwt_secret_key_2024_secure
+
+server:
+  port: 8080

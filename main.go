@@ -36,7 +36,7 @@ func main() {
 	r := routes.SetupRouter(cfg)
 
 	// 启动服务器
-	serverAddr := fmt.Sprintf(":%s", cfg.ServerPort)
+	serverAddr := fmt.Sprintf(":%s", cfg.GetServerPort())
 	log.Printf("Server starting on %s", serverAddr)
 	if err := r.Run(serverAddr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)

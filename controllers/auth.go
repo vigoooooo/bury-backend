@@ -66,7 +66,7 @@ func (ac *AuthController) Register(c *gin.Context) {
 	}
 
 	// 生成 JWT 令牌
-	token, err := utils.GenerateToken(user.ID, ac.cfg.JWTSecret)
+	token, err := utils.GenerateToken(user.ID, ac.cfg.GetJWTSecret())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
@@ -109,7 +109,7 @@ func (ac *AuthController) Login(c *gin.Context) {
 	}
 
 	// 生成 JWT 令牌
-	token, err := utils.GenerateToken(user.ID, ac.cfg.JWTSecret)
+	token, err := utils.GenerateToken(user.ID, ac.cfg.GetJWTSecret())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return

@@ -28,7 +28,7 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		}
 
 		tokenString := parts[1]
-		claims, err := utils.ValidateToken(tokenString, cfg.JWTSecret)
+		claims, err := utils.ValidateToken(tokenString, cfg.GetJWTSecret())
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
 			c.Abort()
