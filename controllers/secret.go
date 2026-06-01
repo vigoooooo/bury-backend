@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -40,7 +39,7 @@ func NewSecretController() *SecretController {
 // cleanupExpiredTokens 清理过期的 token
 func (sc *SecretController) cleanupExpiredTokens() {
 	for {
-		time.Sleep(time.Second * 5)
+		time.Sleep(time.Second * 30)
 		sc.mutex.Lock()
 		now := time.Now()
 		for token, info := range sc.tokenCache {
@@ -61,39 +60,52 @@ func (sc *SecretController) addToken(token string, secretID uint64, isDecoy bool
 		CreatedAt: time.Now(),
 		IsDecoy:   isDecoy,
 	}
-	// 打印添加的 token
-	fmt.Printf("Added token: %s, secretID: %d, isDecoy: %v, time: %v\n", token, secretID, isDecoy, time.Now())
 }
 
-// validateToken 验证 token 是否有效
+// validateToken 验证 token 是否有效（一次性使用）
 func (sc *SecretController) validateToken(token string) (uint64, bool, bool) {
 	sc.mutex.Lock()
 	defer sc.mutex.Unlock()
 
-	// 打印当前缓存中的所有 token
-	fmt.Printf("Current tokens in cache: %d\n", len(sc.tokenCache))
-	for t := range sc.tokenCache {
-		fmt.Printf("Token in cache: %s\n", t)
-	}
-
 	info, exists := sc.tokenCache[token]
 	if !exists {
-		fmt.Printf("Token not found: %s\n", token)
 		return 0, false, false
 	}
 
 	// 检查 token 是否过期
-	fmt.Printf("Token found: %s, secretID: %d, created at: %v, current time: %v\n", token, info.SecretID, info.CreatedAt, time.Now())
 	if time.Now().Sub(info.CreatedAt) > time.Second*60 {
-		fmt.Printf("Token expired: %s\n", token)
 		delete(sc.tokenCache, token)
 		return 0, false, false
 	}
 
 	// 验证通过后删除 token，确保只能使用一次
-	fmt.Printf("Token validated and removed: %s\n", token)
 	delete(sc.tokenCache, token)
 	return info.SecretID, true, info.IsDecoy
+}
+
+// peekToken 查看 token 信息但不删除（用于编辑场景需要复用 token）
+func (sc *SecretController) peekToken(token string) (uint64, bool, bool) {
+	sc.mutex.RLock()
+	defer sc.mutex.RUnlock()
+
+	info, exists := sc.tokenCache[token]
+	if !exists {
+		return 0, false, false
+	}
+
+	// 检查 token 是否过期
+	if time.Now().Sub(info.CreatedAt) > time.Second*60 {
+		return 0, false, false
+	}
+
+	return info.SecretID, true, info.IsDecoy
+}
+
+// consumeToken 消费 token（编辑完成后调用）
+func (sc *SecretController) consumeToken(token string) {
+	sc.mutex.Lock()
+	defer sc.mutex.Unlock()
+	delete(sc.tokenCache, token)
 }
 
 // CreateSecretRequest 创建秘密请求
@@ -129,7 +141,29 @@ type UpdateSecretRequest struct {
 	EnableDecoyPassword      bool       `json:"enable_decoy_password"`
 	DecoyContent             string     `json:"decoy_content"`
 	DecoyPassword            string     `json:"decoy_password"`
+	DecoyUnchanged           bool       `json:"decoy_unchanged"`
 	DestroyOnDecoyAccess     bool       `json:"destroy_on_decoy_access"`
+}
+
+// sanitizeInput 基本的输入消毒，防止 XSS
+func sanitizeInput(input string) string {
+	// 移除潜在的 HTML/JS 标签
+	result := make([]byte, 0, len(input))
+	inTag := false
+	for i := 0; i < len(input); i++ {
+		if input[i] == '<' {
+			inTag = true
+			continue
+		}
+		if input[i] == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			result = append(result, input[i])
+		}
+	}
+	return string(result)
 }
 
 // CreateSecret 创建秘密接口
@@ -146,11 +180,29 @@ func (sc *SecretController) CreateSecret(c *gin.Context) {
 		return
 	}
 
+	// 对提取码进行 bcrypt 哈希（零知识架构：后端只存哈希，不可逆）
+	extractCodeHash, err := models.HashCode(req.ExtractCode)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to secure extract code"})
+		return
+	}
+
+	// 对诱饵密码进行 bcrypt 哈希（如果启用）
+	var decoyPasswordHash string
+	if req.EnableDecoyPassword && req.DecoyPassword != "" {
+		hash, err := models.HashCode(req.DecoyPassword)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to secure decoy password"})
+			return
+		}
+		decoyPasswordHash = hash
+	}
+
 	secret := models.Secret{
 		UserID:                   userID.(uint),
-		SecretTitle:              req.SecretTitle,
-		SecretContent:            req.SecretContent,
-		ExtractCode:              req.ExtractCode,
+		SecretTitle:              sanitizeInput(req.SecretTitle),
+		SecretContent:            req.SecretContent, // 客户端加密的内容，原样存储
+		ExtractCodeHash:          extractCodeHash,
 		DestructionMethod:        req.DestructionMethod,
 		MaximumViews:             req.MaximumViews,
 		RemainingViews:           req.MaximumViews,
@@ -159,8 +211,8 @@ func (sc *SecretController) CreateSecret(c *gin.Context) {
 		FailedAttempts:           req.FailedAttempts,
 		RemainingAttempts:        req.FailedAttempts,
 		EnableDecoyPassword:      req.EnableDecoyPassword,
-		DecoyContent:             req.DecoyContent,
-		DecoyPassword:            req.DecoyPassword,
+		DecoyContent:             req.DecoyContent, // 客户端加密的内容，原样存储
+		DecoyPasswordHash:        decoyPasswordHash,
 		DestroyOnDecoyAccess:     req.DestroyOnDecoyAccess,
 		DestroyTime:              req.DestroyTime,
 	}
@@ -172,7 +224,11 @@ func (sc *SecretController) CreateSecret(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Secret created successfully",
-		"secret":  secret,
+		"secret": gin.H{
+			"id":      strconv.FormatUint(uint64(secret.ID), 10),
+			"title":   secret.SecretTitle,
+			"created": secret.CreatedAt,
+		},
 	})
 }
 
@@ -197,7 +253,7 @@ func (sc *SecretController) UpdateSecret(c *gin.Context) {
 		return
 	}
 
-	validSecretID, valid, _ := sc.validateToken(req.ExtractToken)
+	validSecretID, valid, _ := sc.peekToken(req.ExtractToken)
 	if !valid || validSecretID != secretID {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired extract token"})
 		return
@@ -210,20 +266,43 @@ func (sc *SecretController) UpdateSecret(c *gin.Context) {
 		return
 	}
 
+	// 对新的提取码进行 bcrypt 哈希
+	extractCodeHash, err := models.HashCode(req.ExtractCode)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to secure extract code"})
+		return
+	}
+
+	// 对新的诱饵密码进行 bcrypt 哈希（如果启用且非不变模式）
+	var decoyPasswordHash string
+	if req.EnableDecoyPassword && !req.DecoyUnchanged && req.DecoyPassword != "" {
+		hash, err := models.HashCode(req.DecoyPassword)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to secure decoy password"})
+			return
+		}
+		decoyPasswordHash = hash
+	}
+
 	// 更新秘密
-	secret.SecretTitle = req.SecretTitle
-	secret.SecretContent = req.SecretContent
-	secret.ExtractCode = req.ExtractCode
+	secret.SecretTitle = sanitizeInput(req.SecretTitle)
+	secret.SecretContent = req.SecretContent // 客户端加密的内容
+	secret.ExtractCodeHash = extractCodeHash
 	secret.DestructionMethod = req.DestructionMethod
 	secret.MaximumViews = req.MaximumViews
-	secret.RemainingViews = req.MaximumViews // 重置剩余查看次数
+	secret.RemainingViews = req.MaximumViews
 	secret.ShowInSecretsList = req.ShowInSecretsList
 	secret.WrongPasswordDestruction = req.WrongPasswordDestruction
 	secret.FailedAttempts = req.FailedAttempts
-	secret.RemainingAttempts = req.FailedAttempts // 重置剩余尝试次数
+	secret.RemainingAttempts = req.FailedAttempts
 	secret.EnableDecoyPassword = req.EnableDecoyPassword
-	secret.DecoyContent = req.DecoyContent
-	secret.DecoyPassword = req.DecoyPassword
+	if req.DecoyUnchanged {
+		// 诱饵内容不变，保留原有值
+		// secret.DecoyContent 和 secret.DecoyPasswordHash 保持不变
+	} else {
+		secret.DecoyContent = req.DecoyContent // 客户端加密的内容
+		secret.DecoyPasswordHash = decoyPasswordHash
+	}
 	secret.DestroyOnDecoyAccess = req.DestroyOnDecoyAccess
 	secret.DestroyTime = req.DestroyTime
 
@@ -232,15 +311,22 @@ func (sc *SecretController) UpdateSecret(c *gin.Context) {
 		return
 	}
 
+	// 更新成功后消费 token
+	sc.consumeToken(req.ExtractToken)
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Secret updated successfully",
-		"secret":  secret,
+		"secret": gin.H{
+			"id":      strconv.FormatUint(uint64(secret.ID), 10),
+			"title":   secret.SecretTitle,
+			"updated": secret.UpdatedAt,
+		},
 	})
 }
 
 // DeleteSecret 删除秘密接口
 func (sc *SecretController) DeleteSecret(c *gin.Context) {
-	secretID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	secretID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid secret ID"})
 		return
@@ -320,30 +406,20 @@ func (sc *SecretController) QuerySecret(c *gin.Context) {
 
 	offset := (page - 1) * pageSize
 
-	// 获取用户的加密密钥
-	var user models.User
-	if result := models.DB.Where("id = ?", userID).First(&user); result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get user information"})
-		return
-	}
-
 	// 查询用户的秘密（不包括已删除的），支持分页
 	var secrets []models.Secret
 	var total int64
 
-	// 获取总数
 	models.DB.Model(&models.Secret{}).Where("user_id = ? AND is_deleted = ?", userID, false).Count(&total)
 
-	// 获取分页数据，按更新时间降序排序
 	if result := models.DB.Where("user_id = ? AND is_deleted = ?", userID, false).Order("updated_at DESC").Offset(offset).Limit(pageSize).Find(&secrets); result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query secrets"})
 		return
 	}
 
-	// 转换为响应结构
+	// 转换为响应结构（不含任何加密数据）
 	responseSecrets := make([]SecretResponse, len(secrets))
 	for i, secret := range secrets {
-		// 创建响应对象
 		responseSecrets[i] = SecretResponse{
 			ID:                   strconv.FormatUint(uint64(secret.ID), 10),
 			SecretTitle:          secret.SecretTitle,
@@ -368,13 +444,14 @@ func (sc *SecretController) QuerySecret(c *gin.Context) {
 	})
 }
 
-// MinimalSecretResponse 最小秘密响应
+// MinimalSecretResponse 最小秘密响应（查看时使用）
 type MinimalSecretResponse struct {
 	ID            string `json:"id"`
 	SecretContent string `json:"secret_content"`
+	IsDecoy       bool   `json:"is_decoy"`
 }
 
-// GetSecret 获取秘密接口
+// GetSecret 获取秘密接口（查看模式）
 func (sc *SecretController) GetSecret(c *gin.Context) {
 	secretID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -405,7 +482,8 @@ func (sc *SecretController) GetSecret(c *gin.Context) {
 
 	// 创建最小响应
 	minimalSecret := MinimalSecretResponse{
-		ID: strconv.FormatUint(uint64(secret.ID), 10),
+		ID:      strconv.FormatUint(uint64(secret.ID), 10),
+		IsDecoy: isDecoy,
 	}
 
 	// 使用状态机处理访问
@@ -416,7 +494,7 @@ func (sc *SecretController) GetSecret(c *gin.Context) {
 		return
 	}
 
-	// 如果是诱饵码，返回诱饵内容
+	// 根据是否为诱饵，返回对应的加密内容（客户端用对应的密钥解密）
 	if isDecoy {
 		minimalSecret.SecretContent = secret.DecoyContent
 	} else {
@@ -451,25 +529,10 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 		return
 	}
 
-	// 验证 token（不删除token，因为还需要用于后续的UpdateSecret操作）
-	sc.mutex.RLock()
-	info, exists := sc.tokenCache[extractToken]
-	sc.mutex.RUnlock()
-
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid extract token"})
-		return
-	}
-
-	// 检查 token 是否过期
-	if time.Now().Sub(info.CreatedAt) > time.Second*60 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Expired extract token"})
-		return
-	}
-
-	// 检查 token 是否对应正确的秘密
-	if info.SecretID != secretID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid extract token for this secret"})
+	// 验证 token（peek 模式，不删除）
+	validSecretID, valid, _ := sc.peekToken(extractToken)
+	if !valid || validSecretID != secretID {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired extract token"})
 		return
 	}
 
@@ -480,18 +543,17 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 		return
 	}
 
-	// 检查秘密是否已删除
 	if secret.IsDeleted {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Secret has been deleted"})
 		return
 	}
 
-	// 创建完整的编辑响应
+	// 零知识架构：不返回 extract_code 和 decoy_password 的明文
+	// 只返回加密的内容和元数据，客户端自行解密
 	editSecretResponse := struct {
 		ID                       string     `json:"id"`
 		SecretTitle              string     `json:"secret_title"`
 		SecretContent            string     `json:"secret_content"`
-		ExtractCode              string     `json:"extract_code"`
 		DestructionMethod        string     `json:"destruction_method"`
 		MaximumViews             int        `json:"maximum_views"`
 		DestroyTime              *time.Time `json:"destroy_time"`
@@ -500,13 +562,11 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 		FailedAttempts           int        `json:"failed_attempts"`
 		EnableDecoyPassword      bool       `json:"enable_decoy_password"`
 		DecoyContent             string     `json:"decoy_content"`
-		DecoyPassword            string     `json:"decoy_password"`
 		DestroyOnDecoyAccess     bool       `json:"destroy_on_decoy_access"`
 	}{
 		ID:                       strconv.FormatUint(uint64(secret.ID), 10),
 		SecretTitle:              secret.SecretTitle,
 		SecretContent:            secret.SecretContent,
-		ExtractCode:              secret.ExtractCode,
 		DestructionMethod:        secret.DestructionMethod,
 		MaximumViews:             secret.MaximumViews,
 		DestroyTime:              secret.DestroyTime,
@@ -515,7 +575,6 @@ func (sc *SecretController) GetSecretForEdit(c *gin.Context) {
 		FailedAttempts:           secret.FailedAttempts,
 		EnableDecoyPassword:      secret.EnableDecoyPassword,
 		DecoyContent:             secret.DecoyContent,
-		DecoyPassword:            secret.DecoyPassword,
 		DestroyOnDecoyAccess:     secret.DestroyOnDecoyAccess,
 	}
 
@@ -546,6 +605,7 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"is_valid":      false,
 			"extract_token": "",
+			"is_decoy":      false,
 		})
 		return
 	}
@@ -556,104 +616,73 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"is_valid":      false,
 			"extract_token": "",
+			"is_decoy":      false,
 		})
 		return
 	}
 
 	// 检查是否需要销毁秘密
 	if secret.DestructionMethod == "view" && secret.RemainingViews <= 0 {
-		// 物理删除秘密
 		models.DB.Unscoped().Delete(&secret)
 		c.JSON(http.StatusOK, gin.H{
 			"is_valid":      false,
 			"extract_token": "",
+			"is_decoy":      false,
 		})
 		return
 	}
 
-	// 解密提取码和诱饵密码
-	const encryptionKey = "bury-secret-key-2026" // 与前端使用相同的密钥
-
-	// 解密提取码
-	decryptedExtractCode, err := models.Decrypt(secret.ExtractCode, encryptionKey)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"is_valid":      false,
-			"extract_token": "",
-		})
-		return
-	}
-
+	// 零知识架构：使用 bcrypt 比较而非解密
 	// 检查是否是诱饵码
 	isDecoy := false
-	if secret.EnableDecoyPassword && secret.DecoyPassword != "" {
-		// 解密诱饵密码
-		decryptedDecoyPassword, err := models.Decrypt(secret.DecoyPassword, encryptionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"is_valid":      false,
-				"extract_token": "",
-			})
-			return
-		}
-		if decryptedDecoyPassword == req.Code {
+	if secret.EnableDecoyPassword && secret.DecoyPasswordHash != "" {
+		if models.CheckCode(secret.DecoyPasswordHash, req.Code) {
 			isDecoy = true
 		}
 	}
 
 	// 验证提取码
 	if req.Mode == "edit" {
-		// 在edit模式下，只有输入正确的Extractcode才能验证成功
-		if decryptedExtractCode != req.Code {
+		// edit 模式下，只有正确的提取码才能验证成功（不接受诱饵码）
+		if !models.CheckCode(secret.ExtractCodeHash, req.Code) {
 			// 使用状态机处理错误密码
 			stateMachine := models.NewSecretStateMachine(&secret, models.DB)
-			_, err := stateMachine.ProcessWrongPassword()
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"is_valid":      false,
-					"extract_token": "",
-				})
-				return
-			}
+			stateMachine.ProcessWrongPassword()
 			c.JSON(http.StatusOK, gin.H{
 				"is_valid":      false,
 				"extract_token": "",
+				"is_decoy":      false,
 			})
 			return
 		}
 	} else {
-		// 在view模式下，真正的提取码或诱饵码都可以通过验证
-		if decryptedExtractCode != req.Code && !isDecoy {
+		// view 模式下，提取码或诱饵码都可以通过验证
+		if !models.CheckCode(secret.ExtractCodeHash, req.Code) && !isDecoy {
 			// 使用状态机处理错误密码
 			stateMachine := models.NewSecretStateMachine(&secret, models.DB)
-			_, err := stateMachine.ProcessWrongPassword()
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"is_valid":      false,
-					"extract_token": "",
-				})
-				return
-			}
+			stateMachine.ProcessWrongPassword()
 			c.JSON(http.StatusOK, gin.H{
 				"is_valid":      false,
 				"extract_token": "",
+				"is_decoy":      false,
 			})
 			return
 		}
 	}
 
-	// 重置错误尝试次数
-	stateMachine := models.NewSecretStateMachine(&secret, models.DB)
-	if err := stateMachine.ResetAttempts(); err != nil {
+	// 注意：不再重置错误尝试次数
+	// 重置尝试次数会破坏安全设计，攻击者可以无限循环尝试
+
+	// 生成加密安全的随机 extract_token
+	extractToken, err := models.GenerateSecureToken()
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"is_valid":      false,
 			"extract_token": "",
+			"is_decoy":      false,
 		})
 		return
 	}
-
-	// 生成 extract_token
-	extractToken := "extract_token_" + strconv.FormatUint(secretID, 10) + "_" + strconv.FormatInt(time.Now().Unix(), 10)
 
 	// 将 token 添加到缓存，标记是否为诱饵
 	sc.addToken(extractToken, secretID, isDecoy)
@@ -661,5 +690,6 @@ func (sc *SecretController) VerifySecret(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"is_valid":      true,
 		"extract_token": extractToken,
+		"is_decoy":      isDecoy,
 	})
 }

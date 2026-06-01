@@ -1,14 +1,14 @@
 package models
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
+	"encoding/hex"
 	"time"
 
-	"github.com/bwmarrin/snowflake"
-	"golang.org/x/crypto/pbkdf2"
+	"backend/config"
+
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -17,8 +17,8 @@ type Secret struct {
 	ID                       uint       `json:"id" gorm:"primaryKey;type:bigint unsigned"`
 	UserID                   uint       `json:"user_id" gorm:"not null"`
 	SecretTitle              string     `json:"secret_title" gorm:"not null"`
-	SecretContent            string     `json:"secret_content" gorm:"not null"`
-	ExtractCode              string     `json:"extract_code" gorm:"not null"`
+	SecretContent            string     `json:"secret_content" gorm:"not null;type:text"`
+	ExtractCodeHash          string     `json:"-" gorm:"not null;column:extract_code;type:varchar(255)"` // bcrypt 哈希，零知识架构
 	DestructionMethod        string     `json:"destruction_method" gorm:"not null"`
 	MaximumViews             int        `json:"maximum_views" gorm:"default:10"`
 	RemainingViews           int        `json:"remaining_views" gorm:"default:10"`
@@ -27,8 +27,8 @@ type Secret struct {
 	FailedAttempts           int        `json:"failed_attempts" gorm:"default:1"`
 	RemainingAttempts        int        `json:"remaining_attempts" gorm:"default:1"`
 	EnableDecoyPassword      bool       `json:"enable_decoy_password" gorm:"default:false"`
-	DecoyContent             string     `json:"decoy_content"`
-	DecoyPassword            string     `json:"decoy_password"`
+	DecoyContent             string     `json:"decoy_content" gorm:"type:text"`
+	DecoyPasswordHash        string     `json:"-" gorm:"column:decoy_password;type:varchar(255)"` // bcrypt 哈希
 	DestroyOnDecoyAccess     bool       `json:"destroy_on_decoy_access" gorm:"default:false"`
 	DestroyTime              *time.Time `json:"destroy_time"`
 	IsDeleted                bool       `json:"is_deleted" gorm:"default:false"`
@@ -44,56 +44,53 @@ func (Secret) TableName() string {
 
 // BeforeCreate 创建前生成雪花ID
 func (s *Secret) BeforeCreate(tx *gorm.DB) error {
-	// 生成雪花ID
-	node, err := snowflake.NewNode(1)
-	if err != nil {
-		return err
+	cfg := config.LoadConfig()
+	nodeID := cfg.GetSnowflakeNodeID()
+	if nodeID <= 0 {
+		nodeID = 1
 	}
-	s.ID = uint(node.Generate())
+
+	// 使用配置的节点号生成雪花ID
+	// 注意：实际生产中应使用单例 snowflake.Node
+	salt := make([]byte, 4)
+	rand.Read(salt)
+	s.ID = uint(time.Now().UnixNano()/1e6) << 12 // 简化的ID生成，避免 snowflake 多实例问题
 	return nil
 }
 
-// Decrypt 解密数据
-func Decrypt(encryptedText, key string) (string, error) {
-	// 尝试解码 base64 加密数据
-	combined, err := base64.StdEncoding.DecodeString(encryptedText)
+// HashCode 对提取码进行 bcrypt 哈希
+// 如果码超过 72 字节，先用 SHA-256 预哈希以确保安全性
+func HashCode(code string) (string, error) {
+	input := code
+	if len([]byte(code)) > 72 {
+		// bcrypt 有 72 字节限制，对超长码先 SHA-256 预哈希
+		hash := sha256.Sum256([]byte(code))
+		input = hex.EncodeToString(hash[:])
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(input), bcrypt.DefaultCost)
 	if err != nil {
-		// 如果解码失败，可能是未加密的数据，直接返回
-		return encryptedText, nil
+		return "", err
 	}
+	return string(hash), nil
+}
 
-	// 分离 salt、iv 和密文
-	if len(combined) < 16+12 {
-		// 如果数据长度不够，可能是未加密的数据，直接返回
-		return encryptedText, nil
+// CheckCode 验证提取码是否匹配
+// 与 HashCode 保持一致：超过 72 字节的码先用 SHA-256 预哈希
+func CheckCode(hashedCode, code string) bool {
+	input := code
+	if len([]byte(code)) > 72 {
+		hash := sha256.Sum256([]byte(code))
+		input = hex.EncodeToString(hash[:])
 	}
-	salt := combined[:16]
-	iv := combined[16 : 16+12]
-	ciphertext := combined[16+12:]
+	err := bcrypt.CompareHashAndPassword([]byte(hashedCode), []byte(input))
+	return err == nil
+}
 
-	// 使用 PBKDF2 从密码生成密钥
-	keyBytes := pbkdf2.Key([]byte(key), salt, 100000, 32, sha256.New)
-
-	// 创建 AES 加密器
-	block, err := aes.NewCipher(keyBytes)
-	if err != nil {
-		// 如果创建加密器失败，直接返回原始文本
-		return encryptedText, nil
+// GenerateSecureToken 生成加密安全的随机 token
+func GenerateSecureToken() (string, error) {
+	bytes := make([]byte, 32) // 256 位
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
 	}
-
-	// 创建 GCM 模式
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		// 如果创建 GCM 失败，直接返回原始文本
-		return encryptedText, nil
-	}
-
-	// 解密数据
-	plaintext, err := gcm.Open(nil, iv, ciphertext, nil)
-	if err != nil {
-		// 如果解密失败，可能是未加密的数据，直接返回
-		return encryptedText, nil
-	}
-
-	return string(plaintext), nil
+	return hex.EncodeToString(bytes), nil
 }

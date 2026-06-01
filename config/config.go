@@ -21,8 +21,17 @@ type Config struct {
 		Secret string `yaml:"secret"`
 	} `yaml:"jwt"`
 	Server struct {
-		Port string `yaml:"port"`
+		Port        string `yaml:"port"`
+		TLSCertFile string `yaml:"tls_cert_file"`
+		TLSKeyFile  string `yaml:"tls_key_file"`
 	} `yaml:"server"`
+	CORS struct {
+		AllowedOrigins []string `yaml:"allowed_origins"`
+	} `yaml:"cors"`
+	Security struct {
+		SnowflakeNodeID int64 `yaml:"snowflake_node_id"`
+		RateLimitPerMin int   `yaml:"rate_limit_per_min"`
+	} `yaml:"security"`
 }
 
 // LoadConfig 加载配置
@@ -91,4 +100,34 @@ func (c *Config) GetJWTSecret() string {
 // GetServerPort 获取服务器端口
 func (c *Config) GetServerPort() string {
 	return c.Server.Port
+}
+
+// GetTLSCertFile 获取 TLS 证书文件路径
+func (c *Config) GetTLSCertFile() string {
+	return c.Server.TLSCertFile
+}
+
+// GetTLSKeyFile 获取 TLS 私钥文件路径
+func (c *Config) GetTLSKeyFile() string {
+	return c.Server.TLSKeyFile
+}
+
+// IsTLSEnabled 是否启用 TLS
+func (c *Config) IsTLSEnabled() bool {
+	return c.Server.TLSCertFile != "" && c.Server.TLSKeyFile != ""
+}
+
+// GetAllowedOrigins 获取允许的 CORS 来源
+func (c *Config) GetAllowedOrigins() []string {
+	return c.CORS.AllowedOrigins
+}
+
+// GetSnowflakeNodeID 获取雪花ID节点号
+func (c *Config) GetSnowflakeNodeID() int64 {
+	return c.Security.SnowflakeNodeID
+}
+
+// GetRateLimitPerMin 获取每分钟速率限制
+func (c *Config) GetRateLimitPerMin() int {
+	return c.Security.RateLimitPerMin
 }

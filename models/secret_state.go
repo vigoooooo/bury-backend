@@ -120,15 +120,6 @@ func (sm *SecretStateMachine) ProcessWrongPassword() (SecretState, error) {
 	return SecretStateActive, nil
 }
 
-// ResetAttempts 重置错误尝试次数
-func (sm *SecretStateMachine) ResetAttempts() error {
-	if sm.secret.WrongPasswordDestruction && sm.secret.RemainingAttempts != sm.secret.FailedAttempts {
-		sm.secret.RemainingAttempts = sm.secret.FailedAttempts
-		return sm.db.Save(sm.secret).Error
-	}
-	return nil
-}
-
 // CleanupExpired 清理过期秘密
 func CleanupExpired(db *gorm.DB) error {
 	// 清理按时间过期的秘密

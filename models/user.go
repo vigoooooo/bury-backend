@@ -3,6 +3,7 @@ package models
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -28,8 +29,8 @@ type User struct {
 // BeforeSave 保存前加密密码
 func (u *User) BeforeSave(tx *gorm.DB) error {
 	// 只有当密码被修改时才进行哈希处理
-	// 检查密码是否已经是哈希过的（bcrypt 哈希值长度固定为 60）
-	if u.Password != "" && len(u.Password) != 60 {
+	// 检查密码是否已经是 bcrypt 哈希（bcrypt 哈希值以 $2a$、$2b$ 或 $2y$ 开头）
+	if u.Password != "" && !isBcryptHash(u.Password) {
 		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
 		if err != nil {
 			return err
@@ -37,6 +38,13 @@ func (u *User) BeforeSave(tx *gorm.DB) error {
 		u.Password = string(hashedPassword)
 	}
 	return nil
+}
+
+// isBcryptHash 检查字符串是否为 bcrypt 哈希值
+func isBcryptHash(s string) bool {
+	return strings.HasPrefix(s, "$2a$") ||
+		strings.HasPrefix(s, "$2b$") ||
+		strings.HasPrefix(s, "$2y$")
 }
 
 // BeforeCreate 创建前生成加密密钥

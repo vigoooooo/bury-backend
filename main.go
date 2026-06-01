@@ -38,8 +38,18 @@ func main() {
 	// 启动服务器
 	serverAddr := fmt.Sprintf(":%s", cfg.GetServerPort())
 	log.Printf("Server starting on %s", serverAddr)
-	if err := r.Run(serverAddr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+
+	if cfg.IsTLSEnabled() {
+		// TLS 模式
+		log.Printf("TLS enabled: cert=%s, key=%s", cfg.GetTLSCertFile(), cfg.GetTLSKeyFile())
+		if err := r.RunTLS(serverAddr, cfg.GetTLSCertFile(), cfg.GetTLSKeyFile()); err != nil {
+			log.Fatalf("Failed to start TLS server: %v", err)
+		}
+	} else {
+		// 普通 HTTP 模式
+		if err := r.Run(serverAddr); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
 	}
 }
 

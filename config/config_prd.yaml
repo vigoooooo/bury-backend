@@ -11,3 +11,15 @@ jwt:
 
 server:
   port: 8080
+  # tls_cert_file: "/etc/ssl/certs/bury.crt"
+  # tls_key_file: "/etc/ssl/certs/bury.key"
+
+cors:
+  allowed_origins:
+    - "https://buried.app"
+    - "https://www.buried.app"
+    - "capacitor://localhost"
+
+security:
+  snowflake_node_id: 1
+  rate_limit_per_min: 30
